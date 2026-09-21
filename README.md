@@ -1,5 +1,5 @@
 # CloudFlow Analytics
-### Cloud-Native ETL & BI Pipeline
+### Cloud-Native ETL, BI & Data Reliability Platform
 
 An end-to-end data engineering project designed to turn public datasets into reliable, business-ready analytics through a reproducible cloud pipeline.
 
@@ -19,6 +19,7 @@ The initial use case will be **e-commerce order analytics**, subject to selectin
 - Support repeatable loads, backfills, and a documented incremental strategy.
 - Load curated analytical tables into Amazon Redshift.
 - Build a Streamlit dashboard for metrics, trends, and anomaly flags.
+- Provide a data reliability console with quality gates, lineage, freshness indicators, and controlled recovery.
 - Provision cloud infrastructure with Terraform.
 - Document data lineage, quality checks, deployment, and measured cloud costs.
 
@@ -83,6 +84,39 @@ Planned dashboard metrics:
 
 Revenue and order-status definitions must be documented before the first dashboard is accepted. Anomaly flags are exploratory signals, not confirmed incidents.
 
+## Standout feature: data reliability and recovery console
+
+Build a Streamlit operations view that answers **“Can I trust this dashboard?”** for each metric.
+
+| Capability | Planned behavior |
+| --- | --- |
+| Metric provenance | Show the source dataset, transformation version, upstream tables, batch ID, and last successful publication |
+| Quality checks | Detect duplicate order IDs, missing required fields/prices, and unexpected row counts using documented thresholds |
+| Quarantine | Preserve rejected records with rule IDs, reasons, and source/batch references |
+| Run history | Show execution status, check results, row counts, duration, and retry attempts |
+| Impact tracing | Map a failed table or batch to affected metrics using explicit lineage metadata |
+| Freshness | Label metrics as current, stale, or unavailable; expose data age and freshness targets |
+| Controlled recovery | Allow authorized operators to retry a failed batch and inspect its outcome |
+
+### Publication and recovery contract
+
+Write candidate outputs into a staging area and run quality checks before publication. Separate warning-only rules from blocking rules. A blocking failure must prevent the entire affected reporting snapshot from replacing the last validated snapshot. If no validated snapshot exists, show an unavailable state rather than empty totals presented as valid data.
+
+Record runs, quality results, rejected-row references, lineage edges, and publication versions in persistent metadata tables. Advance incremental watermarks only after publication succeeds. Publish a consistent snapshot so the dashboard cannot mix tables from different batches.
+
+Expose recovery through an authenticated backend integration with Airflow, with scoped permissions, an audit record, and protection against concurrent retries. Do not expose cloud credentials or arbitrary command execution in the dashboard. A corrected source creates a new immutable input version linked to the failed run. Retrying the same input remains idempotent.
+
+### Demonstration and acceptance tests
+
+1. Load a clean sample and publish the first validated dashboard snapshot.
+2. Submit a fixture containing duplicate IDs and missing prices; trigger a blocking check.
+3. Inspect the failed run, quarantined records, and affected dashboard metrics.
+4. Verify that the dashboard retains the previous snapshot and shows a freshness warning.
+5. Correct the fixture and trigger an authorized rerun.
+6. Verify reconciliation, an updated publication timestamp, and no duplicates after repeating the run.
+
+Also demonstrate an unexpected row-count warning. Begin with deterministic checks and explicit lineage mappings; automated lineage discovery and learned anomaly thresholds can follow later.
+
 ## Proposed repository structure
 
 These directories are a blueprint and do not exist yet.
@@ -94,7 +128,8 @@ These directories are a blueprint and do not exist yet.
 | `src/cloudflow/quality/` | Validation and quarantine rules |
 | `dags/` | Airflow DAGs |
 | `sql/` | Warehouse schema, merge logic, analytical queries |
-| `dashboard/` | Streamlit application |
+| `dashboard/` | Streamlit analytics and reliability console |
+| `src/cloudflow/observability/` | Run metadata, lineage, publication state, recovery integration |
 | `infra/terraform/` | AWS resources and environment configuration |
 | `tests/` | Fixtures, unit tests, integration tests |
 | `docs/` | Architecture, data contract, lineage, runbook, costs |
@@ -133,12 +168,12 @@ Planned tooling: Git, Python, Docker with Compose, Terraform, and AWS CLI. Pin c
 - [ ] **2 — Orchestration:** containerized Airflow, daily DAG, retries, backfills, failure reporting.
 - [ ] **3 — AWS foundation:** Terraform-managed storage, IAM, networking, and warehouse; documented remote state.
 - [ ] **4 — Cloud processing:** Glue jobs, incremental state, quarantine, and Redshift loading.
-- [ ] **5 — Analytics:** star schema, reconciled metrics, Streamlit dashboard, anomaly rules.
+- [ ] **5 — Analytics and reliability:** star schema, reconciled metrics, Streamlit dashboard, run history, quality gates, lineage, freshness, controlled reruns.
 - [ ] **6 — Delivery evidence:** CI checks, architecture and lineage diagrams, screenshots, runbook, cost measurements.
 
 ## Acceptance criteria
 
-The MVP is ready when one documented dataset flows from ingestion to the dashboard, repeated loads produce no duplicates, invalid records are traceable, and a failed batch can be rerun safely. A backfill must be demonstrated, dashboard totals must reconcile with warehouse queries, and deployment/teardown steps must be reproducible.
+The MVP is ready when one documented dataset flows from ingestion to the dashboard, repeated loads produce no duplicates, invalid records are traceable, and a failed batch can be rerun safely. The failure-and-recovery demonstration must preserve the last validated snapshot, enforce operator permissions, and prove duplicate-free retries. A backfill must be demonstrated, dashboard totals must reconcile with warehouse queries, and deployment/teardown steps must be reproducible.
 
 ## Operations and cost plan
 
