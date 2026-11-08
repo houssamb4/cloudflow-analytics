@@ -144,7 +144,6 @@ Requires **Python 3.11+**. Run from the repository root. The local application d
 ```bash
 git clone https://github.com/houssamb4/cloudflow-analytics.git
 cd cloudflow-analytics
-git switch feat/local-pipeline
 
 # With uv: reproducible dependency versions and hashes from uv.lock
 uv sync --extra test --locked
@@ -154,15 +153,7 @@ python -m pytest
 python -m cloudflow.run
 ```
 
-The repository is private, so cloning requires an authorized GitHub account. If uv is unavailable, use standard packaging tooling instead (direct dependencies remain pinned, but transitive dependencies are not locked by pip):
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[test]'
-python -m pytest
-python -m cloudflow.run
-```
+If uv is unavailable: `python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e '.[test]'`.
 
 The default run ingests `tests/fixtures/clean/` into the ignored file `local/cloudflow.duckdb`. JSON output includes run ID, immutable batch ID, status, check results, row counts, and publication ID. Exit codes: `0` published (including a no-op rerun), `2` blocked, `1` execution/input failure. Rerunning the same input creates a new audit attempt but no duplicate data or new publication version.
 
