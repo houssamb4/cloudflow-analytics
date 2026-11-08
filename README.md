@@ -3,13 +3,13 @@
 
 An end-to-end data engineering project designed to turn public datasets into reliable, business-ready analytics through a reproducible cloud pipeline.
 
-> **Status: planning / implementation not started.** This README defines the target architecture and development roadmap. The repository currently has no runnable pipeline, infrastructure, or dashboard. All capabilities below are planned unless explicitly marked complete.
+> **Status: MVP milestone 1 (local vertical slice): implemented locally**. The repository has a tested, quality-gated Python/DuckDB pipeline using synthetic Olist fixtures. Cloud infrastructure, orchestration, and dashboards remain planned; only roadmap item 1 is implemented.
 
 ## Project goal
 
 Build a platform that ingests public data, preserves raw source records, validates and transforms them, loads an analytical warehouse, and serves metrics through a dashboard. The project will demonstrate data modeling, orchestration, incremental processing, cloud infrastructure, and operational monitoring.
 
-The initial use case will be **e-commerce order analytics**, subject to selecting a suitable public dataset and checking its license. Transit ridership is an alternative use case, not an additional MVP requirement.
+The initial use case is **e-commerce order analytics** based on the Olist Brazilian e-commerce schema (CC BY-NC-SA 4.0). The local milestone uses only independently authored synthetic fixtures; no public dataset has been downloaded. See [the source and data contract](docs/data-source.md). Transit ridership is an alternative use case, not an additional MVP requirement.
 
 ## MVP scope
 
@@ -56,7 +56,7 @@ Python ETL jobs will perform the transformations. Terraform will manage the AWS 
 
 ## Data contract and processing rules
 
-Before implementation, record the dataset URL, license, schema, update frequency, and sample records in `docs/data-source.md`.
+The selected dataset URL, license, local subset schema, simulated arrivals, sample records, quality rules, and revenue definitions are documented in [docs/data-source.md](docs/data-source.md). The layer contract below is implemented locally; the cloud destinations remain planned.
 
 The minimum e-commerce contract should include an order identifier, order timestamp, status, and monetary amount. Customer, product, and line-item fields depend on the selected source.
 
@@ -119,9 +119,9 @@ Also demonstrate an unexpected row-count warning. Begin with deterministic check
 
 ## Proposed repository structure
 
-These directories are a blueprint and do not exist yet.
+The Python package, tests, and data-source documentation now exist. The remaining paths are the blueprint for later milestones; no Airflow, dashboard, or infrastructure has been scaffolded.
 
-| Path | Planned contents |
+| Path | Contents (local implementation or future blueprint) |
 | --- | --- |
 | `src/cloudflow/ingestion/` | Source adapters and ingestion metadata |
 | `src/cloudflow/transforms/` | Bronze-to-Silver and Silver-to-Gold logic |
@@ -137,34 +137,77 @@ These directories are a blueprint and do not exist yet.
 | `compose.yaml` | Future local development services |
 | `.env.example` | Future configuration template without secrets |
 
-## Getting started now
+## Getting started locally
 
-Only the clone steps are currently executable:
+Requires **Python 3.11+**. Run from the repository root. The local application depends only on pinned pandas and DuckDB, with pytest for tests (their transitive dependencies are captured in `uv.lock`). No Docker, cloud credentials, or dataset download is needed.
 
 ```bash
 git clone https://github.com/houssamb4/cloudflow-analytics.git
 cd cloudflow-analytics
-git switch -c feat/local-pipeline
+git switch feat/local-pipeline
+
+# With uv: reproducible dependency versions and hashes from uv.lock
+uv sync --extra test --locked
+source .venv/bin/activate
+
+python -m pytest
+python -m cloudflow.run
 ```
 
-The repository is private, so cloning requires an authorized GitHub account.
+The repository is private, so cloning requires an authorized GitHub account. If uv is unavailable, use standard packaging tooling instead (direct dependencies remain pinned, but transitive dependencies are not locked by pip):
 
-### First implementation milestone
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+python -m pytest
+python -m cloudflow.run
+```
 
-1. Select the public dataset and document its license and data contract.
-2. Create a Python package, dependency lock file, and the proposed test directories.
-3. Add a small redistributable or synthetic fixture.
-4. Implement a local pipeline that reads the fixture and writes Bronze, Silver, and Gold outputs.
-5. Test deduplication, invalid-row handling, and repeated execution.
-6. Add actual setup and run commands to this README once the corresponding files exist.
+The default run ingests `tests/fixtures/clean/` into the ignored file `local/cloudflow.duckdb`. JSON output includes run ID, immutable batch ID, status, check results, row counts, and publication ID. Exit codes: `0` published (including a no-op rerun), `2` blocked, `1` execution/input failure. Rerunning the same input creates a new audit attempt but no duplicate data or new publication version.
 
-Start with local files and DuckDB for transformation/query validation. This is a development substitute; Redshift SQL and loading behavior will need separate integration tests.
+### Failure and correction demonstration
 
-Planned tooling: Git, Python, Docker with Compose, Terraform, and AWS CLI. Pin compatible versions during scaffolding. Cloud credentials are not required for the first local milestone.
+Use the same database for all three batches:
+
+```bash
+python -m cloudflow.run --input-dir tests/fixtures/clean --database local/demo.duckdb
+python -m cloudflow.run --input-dir tests/fixtures/invalid --database local/demo.duckdb
+# Expected exit 2: duplicates and missing price block publication.
+# Copy run_id from the blocked run's JSON output:
+python -m cloudflow.run --input-dir tests/fixtures/corrected --database local/demo.duckdb --retry-of <blocked-run-id>
+python -m cloudflow.run --input-dir tests/fixtures/corrected --database local/demo.duckdb
+```
+
+The blocked attempt preserves the previous Silver/Gold snapshot and publication timestamp, while retaining raw inputs, quarantine, and checks. Correction publishes five unique orders, including a late-delivered update. Growth from three to five orders triggers the warning-only row-count check; it does not block recovery. The final retry is idempotent. Use a fresh database filename to restart the demonstration; no destructive reset command is needed.
+
+All layers are tables inside one DuckDB file:
+
+| Schema/tables | Purpose |
+| --- | --- |
+| `bronze.orders`, `order_items`, `customers`, `products`, `batches`, `files` | Immutable raw records, ingestion metadata, and original CSV bytes |
+| `staging.orders`, `order_items`, `customers`, `products`, `fact_orders`, `dim_date` | Latest candidate validated before publication |
+| `silver.orders`, `order_items`, `customers`, `products` | Last validated normalized snapshot |
+| `silver.quarantine` | Invalid rows, reasons, rule IDs, and batch/run references |
+| `gold.fact_orders`, `dim_date` | One row per order; one row per local purchase date; BRL integer cents |
+| `observability.runs`, `check_results`, `publications`, `publication`, `table_contracts` | Attempts, quality results, version history/current state, and declared grains |
+
+Inspect outputs with the installed Python DuckDB package:
+
+```bash
+python - <<'PY'
+import duckdb
+with duckdb.connect('local/cloudflow.duckdb', read_only=True) as db:
+    print(db.sql('SELECT * FROM gold.fact_orders ORDER BY order_id'))
+    print(db.sql('SELECT * FROM observability.runs ORDER BY started_at'))
+PY
+```
+
+An empty `observability.publication` table means no validated output is available. Do not interpret initially empty Gold tables as valid zero metrics. The local runner is single-writer, does not implement an authenticated recovery service, and makes no AWS calls. DuckDB is a development substitute; Redshift SQL/loading behavior and all later roadmap milestones still need separate implementation and integration tests.
 
 ## Development roadmap
 
-- [ ] **1 — Local vertical slice:** dataset contract, sample ingestion, transformations, quality checks, repeatable output.
+- [x] **1 — Local vertical slice:** dataset contract, synthetic sample ingestion, Bronze/Silver/Gold transforms, blocking/warning checks, atomic publication, quarantine, and idempotent reruns.
 - [ ] **2 — Orchestration:** containerized Airflow, daily DAG, retries, backfills, failure reporting.
 - [ ] **3 — AWS foundation:** Terraform-managed storage, IAM, networking, and warehouse; documented remote state.
 - [ ] **4 — Cloud processing:** Glue jobs, incremental state, quarantine, and Redshift loading.
